@@ -5,11 +5,12 @@ require 'nokogiri'
 require 'active_record'
 
 NSTART    = 1
-NEND      = 100
+NEND      = 400000
 EMPTYSIZE = 46
 EPISODES  = 100
 EPSIZE    = 5 # Per episode
 ATTEMPTS  = 10
+THREADS   = 10
 CONFIG    = {
   'adapter'   => 'mysql2',
   'database'  => 'n',
@@ -134,6 +135,7 @@ end
 def setup
   ActiveRecord::Base.establish_connection(CONFIG)
   if Config.find_by(key: "initialized").value.to_i != 1 then setup_db end
+  Config.find_or_create_by(key: "end").update(value: NEND)
 rescue ActiveRecord::ActiveRecordError
   setup_db
 end
@@ -160,6 +162,7 @@ def startup
   puts("Connection to database established.")
   ret = scrap
   ret == -2 ? puts("Scrapping failed at some point.") : puts("Scrapped #{ret + 1} scores successfully.")
+rescue Exception
 end
 
 startup
