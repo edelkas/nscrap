@@ -1,3 +1,5 @@
+# Note: The ID of each score and demo is the pkey in Metanet's server.
+
 # Modules
 require 'net/http'
 # Gems
@@ -39,6 +41,10 @@ class Score < ActiveRecord::Base
   belongs_to :player
   belongs_to :highscoreable, polymorphic: true
   has_one :demo
+
+  def demo
+    Demo.where(id: self.id).first.demo.to_s
+  end
 end
 
 class Player < ActiveRecord::Base
@@ -70,7 +76,7 @@ def setup_db
     t.string :name
   end
   ActiveRecord::Base.connection.create_table :demos do |t|
-    t.references :score
+    #t.references :score
     t.text :demo
   end
   ActiveRecord::Base.connection.create_table :configs do |t|
@@ -117,15 +123,11 @@ def parse(id)
     player: Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
   )
   Demo.find_or_create_by(id: id).update(
-    score: s,
     demo: ret[/&demo=(.*)&epnum=/,1].to_s
   )
   return 0
-#rescue
-#  open('LOG', 'a') { |f|
-#    f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
-#  }
-#  return 1
+rescue => e
+  return e
 end
 
 # < -------------------------------------------------------------------------- >
@@ -140,15 +142,19 @@ rescue ActiveRecord::ActiveRecordError
   setup_db
 end
 
-def scrap
+def _scrap
   nstart = Config.find_by(key: "start").value.to_i || NSTART
   nend = Config.find_by(key: "end").value.to_i || NEND
   (nstart..nend).each{ |id|
     print("Parsing score with ID #{id} / #{NEND}...".ljust(80, " ") + "\r")
     ret = parse(id)
     Config.find_by(key: "start").update(value: id + 1)
-    if ret == 1
+    if ret != 0
+      open('LOG', 'a') { |f|
+        f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
+      }
       puts("[ERROR] When parsing score with ID #{id} / #{NEND}...".ljust(80, " ") + "\r")
+      puts ret
     end
   }
   return nend - nstart
@@ -156,13 +162,30 @@ rescue
   return -2 # -1 means the scrap finished!
 end
 
+def scrap
+  ret = _scrap
+  ret == -2 ? print("Scrapping failed at some point.".ljust(80, " ")) : print("Scrapped #{ret + 1} scores successfully.".ljust(80, " "))
+rescue Interrupt
+  print("Scrapper interrupted.".ljust(80, " "))
+rescue Exception
+end
+
 def startup
   puts("N Scrapper initialized.")
   setup
   puts("Connection to database established.")
-  ret = scrap
-  ret == -2 ? puts("Scrapping failed at some point.") : puts("Scrapped #{ret + 1} scores successfully.")
-rescue Exception
+  if ARGV.size == 0
+    # Put command menu here
+  else
+    # Put a switch between the different commands here using ARGV[0]
+    # If it doesn't exist, print help.
+  end
+end
+
+def demo
+  print Score.where(id: 42).first.demo
 end
 
 startup
+scrap
+#demo
