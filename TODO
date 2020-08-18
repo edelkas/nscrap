@@ -1,0 +1,4 @@
+* Due to concurrency, players can end up being duplicated, due to the use
+  of the "find_or_create_by" method. To solve, appropriately add mutex.
+  It's not necessary for scores or demos since those are created by ID
+  which is unique.
