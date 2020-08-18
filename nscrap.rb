@@ -13,15 +13,19 @@ EPISODES  = 100
 EPSIZE    = 5 # Per episode
 ATTEMPTS  = 10
 THREADS   = 10
+REFRESH   = 100 # Hertz
 CONFIG    = {
   'adapter'   => 'mysql2',
   'database'  => 'n',
+  'pool'      => 2 * THREADS,
   'host'      => 'localhost',
   'username'  => 'root',
   'password'  => 'root',
   'encoding'  => 'utf8mb4',
   'collation' => 'utf8mb4_unicode_ci'
 }
+
+$indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
 
 # < -------------------------------------------------------------------------- >
 # < ---                         DATABASE SETUP                             --- >
@@ -142,21 +146,45 @@ rescue ActiveRecord::ActiveRecordError
   setup_db
 end
 
+def msg
+  index = 0
+  while true
+    min = $indices.min
+    if min != index
+      index = min
+      print("Parsing score with ID #{index} / #{NEND}...".ljust(80, " ") + "\r")
+    end
+    sleep(1.0 / REFRESH)
+  end
+end
+
 def _scrap
+  mutex = Mutex.new
   nstart = Config.find_by(key: "start").value.to_i || NSTART
   nend = Config.find_by(key: "end").value.to_i || NEND
-  (nstart..nend).each{ |id|
-    print("Parsing score with ID #{id} / #{NEND}...".ljust(80, " ") + "\r")
-    ret = parse(id)
-    Config.find_by(key: "start").update(value: id + 1)
-    if ret != 0
-      open('LOG', 'a') { |f|
-        f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
+  $indices = THREADS.times.map{ |t| nstart }
+
+  Thread.new{ msg }
+  threads = THREADS.times.each_with_index.map{ |t, i|
+    Thread.new do
+      (nstart..nend).each{ |id|
+        if id % THREADS == i
+          ret = parse(id)
+          mutex.synchronize do
+            $indices[i] = id
+            Config.find_by(key: "start").update(value: $indices.min + 1)
+          end
+          if ret != 0
+            open('LOG', 'a') { |f|
+              f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
+            }
+            puts("[ERROR] When parsing score with ID #{id} / #{NEND}...".ljust(80, " "))
+          end
+        end
       }
-      puts("[ERROR] When parsing score with ID #{id} / #{NEND}...".ljust(80, " ") + "\r")
-      puts ret
     end
   }
+  threads.each(&:join)
   return nend - nstart
 rescue
   return -2 # -1 means the scrap finished!
