@@ -2,6 +2,7 @@
 
 # Modules
 require 'net/http'
+require 'timeout'
 # Gems
 require 'nokogiri'
 require 'active_record'
@@ -13,6 +14,7 @@ EPISODES  = 100
 EPSIZE    = 5 # Per episode
 ATTEMPTS  = 10
 THREADS   = 10
+TIMEOUT   = 5 # Seconds
 REFRESH   = 100 # Hertz
 CONFIG    = {
   'adapter'   => 'mysql2',
@@ -116,7 +118,18 @@ rescue
 end
 
 def parse(id)
-  ret = download(id)
+  attempts ||= 0
+  ret = nil
+  begin
+    Timeout::timeout(TIMEOUT) do
+      ret = download(id)
+    end
+  rescue Timeout::Error
+    if (attempts += 1) < ATTEMPTS
+      retry
+    end
+  end
+
   if ret.nil? || ret.size < EMPTYSIZE then raise end
   if ret.size == EMPTYSIZE then return 0 end
   s = Score.find_or_create_by(id: id)
