@@ -28,7 +28,7 @@ CONFIG    = {
 }
 
 $count   = 0
-$player  = nil
+$players = THREADS.times.map{ |t| nil }
 $indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
 $time    = 0
 
@@ -124,7 +124,7 @@ rescue
   end
 end
 
-def parse(id)
+def parse(i, id)
   attempts ||= 0
   ret = nil
   begin
@@ -141,13 +141,13 @@ def parse(id)
   if ret.size == EMPTYSIZE then return 0 end
   s = Score.find_or_create_by(id: id)
   $player_mutex.synchronize do
-    $player = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
+    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
   end
   s.update(
     score: ret[/&score=(\d+)/,1].to_i,
     highscoreable_type: Level,
     highscoreable_id: EPSIZE * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
-    player: $player
+    player: $players[i]
   )
   Demo.find_or_create_by(id: id).update(
     demo: ret[/&demo=(.*)&epnum=/,1].to_s
@@ -190,11 +190,11 @@ def _scrap
   $indices = THREADS.times.map{ |t| nstart }
 
   Thread.new{ msg }
-  threads = THREADS.times.each_with_index.map{ |t, i|
+  threads = THREADS.times.map{ |i|
     Thread.new do
       (nstart..nend).each{ |id|
         if id % THREADS == i
-          ret = parse(id)
+          ret = parse(i, id)
           $indices_mutex.synchronize do
             $indices[i] = id
           end
