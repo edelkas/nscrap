@@ -8,7 +8,7 @@ require 'nokogiri'
 require 'active_record'
 
 NSTART    = 1
-NEND      = 400000
+NEND      = 350000
 EMPTYSIZE = 46
 EPISODES  = 100
 EPSIZE    = 5 # Per episode
@@ -160,20 +160,6 @@ rescue => e
   return e
 end
 
-# < -------------------------------------------------------------------------- >
-# < ---                             STARTUP                                --- >
-# < -------------------------------------------------------------------------- >
-
-def setup
-  ActiveRecord::Base.establish_connection(CONFIG)
-  if Config.find_by(key: "initialized").value.to_i != 1 then setup_db end
-  Config.find_or_create_by(key: "end").update(value: NEND)
-rescue ActiveRecord::ActiveRecordError
-  setup_db
-rescue
-  return 1
-end
-
 def msg
   index = 0
   while true
@@ -226,11 +212,70 @@ rescue Interrupt
 rescue Exception
 end
 
+# < -------------------------------------------------------------------------- >
+# < ---                             ANALYSIS                               --- >
+# < -------------------------------------------------------------------------- >
+
+def scores
+  ep  = nil
+  lvl = nil
+
+  while ep.nil?  
+    print("Episode > ")
+    ep = STDIN.gets.chomp.to_i
+    if ep < 0 || ep > 99
+      puts "Episode should be between 0 and 99."
+      ep = nil
+    end
+  end
+
+  while lvl.nil?
+    print("Level > ")
+    lvl = STDIN.gets.chomp.to_i
+    if lvl < 0 || lvl > 4
+      puts "Level should be between 0 and 4."
+      lvl = nil
+    end
+  end
+
+  scores = Level.where(id: 5 * ep + lvl)[0].scores.sort_by{ |s| -s.score }
+  pad_rank  = scores.size.to_s.length
+  pad_score = (scores[0].score.to_f / 40).to_i.to_s.length + 4
+
+  File.write(
+    "00-0.txt",
+    scores.each_with_index.map{ |s, i|
+      "#{"%0#{pad_rank}d" % i} #{"%#{pad_score}.3f" % (s.score.to_f / 40)} #{s.player.name}"
+    }.join("\n")
+  )
+end
+
+def completions
+  
+end
+
+
+
+# < -------------------------------------------------------------------------- >
+# < ---                             STARTUP                                --- >
+# < -------------------------------------------------------------------------- >
+
+def setup
+  ActiveRecord::Base.establish_connection(CONFIG)
+  if Config.find_by(key: "initialized").value.to_i != 1 then setup_db end
+  Config.find_or_create_by(key: "end").update(value: NEND)
+rescue ActiveRecord::ActiveRecordError
+  setup_db
+rescue
+  return 1
+end
+
 def help
   puts "DESCRIPTION: A tool to scrape N v1.4 scores and analyze them."
   puts "USAGE: ruby nscrap.rb [ARGUMENT]"
   puts "ARGUMENTS:"
   puts "scrape - Scrapes the server and seeds the database."
+  puts "scores - Show score leaderboard for a specific episode or level."
   puts "  exit - Exit the program."
   puts "NOTES:"
   puts "    * MySQL with a database named '#{CONFIG['database']}' is needed."
@@ -245,10 +290,10 @@ def main
 
   loop do
     if command.nil?
-      print("> ")
+      print("Command > ")
       command = STDIN.gets.chomp
     end
-    if !["scrape", "exit", "quit"].include?(command)
+    if !["scrape", "scores", "exit", "quit"].include?(command)
       help
       command = nil
       next
@@ -259,6 +304,8 @@ def main
     case command
       when "scrape"
         scrap
+      when "scores"
+        scores
       else
         help
     end
