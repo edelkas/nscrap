@@ -210,15 +210,15 @@ def _scrap
     end
   }
   threads.each(&:join)
-  return nend - nstart
+  return 0
 rescue
-  return -2 # -1 means the scrap finished!
+  return 1
 end
 
 def scrap
   $time = Time.now
   ret = _scrap
-  ret == -2 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{ret + 1} scores successfully.".ljust(80, " "))
+  ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
 rescue Interrupt
   puts("\r[INFO] Scrapper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
 rescue Exception
