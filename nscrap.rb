@@ -133,11 +133,15 @@ def parse(id)
   if ret.nil? || ret.size < EMPTYSIZE then raise end
   if ret.size == EMPTYSIZE then return 0 end
   s = Score.find_or_create_by(id: id)
+  mutex = Mutex.new
+  mutex.synchronize do
+    p = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
+  end
   s.update(
     score: ret[/&score=(\d+)/,1].to_i,
     highscoreable_type: Level,
     highscoreable_id: EPSIZE * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
-    player: Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
+    player: p
   )
   Demo.find_or_create_by(id: id).update(
     demo: ret[/&demo=(.*)&epnum=/,1].to_s
@@ -185,8 +189,8 @@ def _scrap
           ret = parse(id)
           mutex.synchronize do
             $indices[i] = id
-            Config.find_by(key: "start").update(value: $indices.min + 1)
           end
+          Config.find_by(key: "start").update(value: $indices.min + 1)
           if ret != 0
             open('LOG', 'a') { |f|
               f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
@@ -207,12 +211,12 @@ def scrap
   ret = _scrap
   ret == -2 ? print("Scrapping failed at some point.".ljust(80, " ")) : print("Scrapped #{ret + 1} scores successfully.".ljust(80, " "))
 rescue Interrupt
-  print("Scrapper interrupted.".ljust(80, " "))
+  puts("Scrapper interrupted.".ljust(80, " "))
 rescue Exception
 end
 
 def startup
-  puts("N Scrapper initialized.")
+  puts("N Scrapper initialized (Using #{THREADS} threads).")
   setup
   puts("Connection to database established.")
   if ARGV.size == 0
