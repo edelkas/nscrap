@@ -27,7 +27,14 @@ CONFIG    = {
   'collation' => 'utf8mb4_unicode_ci'
 }
 
+$count   = 0
+$player  = nil
 $indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
+$time    = 0
+
+$count_mutex   = Mutex.new
+$player_mutex  = Mutex.new
+$indices_mutex = Mutex.new
 
 # < -------------------------------------------------------------------------- >
 # < ---                         DATABASE SETUP                             --- >
@@ -133,19 +140,21 @@ def parse(id)
   if ret.nil? || ret.size < EMPTYSIZE then raise end
   if ret.size == EMPTYSIZE then return 0 end
   s = Score.find_or_create_by(id: id)
-  mutex = Mutex.new
-  mutex.synchronize do
-    p = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
+  $player_mutex.synchronize do
+    $player = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
   end
   s.update(
     score: ret[/&score=(\d+)/,1].to_i,
     highscoreable_type: Level,
     highscoreable_id: EPSIZE * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
-    player: p
+    player: $player
   )
   Demo.find_or_create_by(id: id).update(
     demo: ret[/&demo=(.*)&epnum=/,1].to_s
   )
+  $count_mutex.synchronize do
+    $count += 1
+  end
   return 0
 rescue => e
   return e
@@ -176,7 +185,6 @@ def msg
 end
 
 def _scrap
-  mutex = Mutex.new
   nstart = Config.find_by(key: "start").value.to_i || NSTART
   nend = Config.find_by(key: "end").value.to_i || NEND
   $indices = THREADS.times.map{ |t| nstart }
@@ -187,7 +195,7 @@ def _scrap
       (nstart..nend).each{ |id|
         if id % THREADS == i
           ret = parse(id)
-          mutex.synchronize do
+          $indices_mutex.synchronize do
             $indices[i] = id
           end
           Config.find_by(key: "start").update(value: $indices.min + 1)
@@ -208,17 +216,18 @@ rescue
 end
 
 def scrap
+  $time = Time.now
   ret = _scrap
-  ret == -2 ? print("Scrapping failed at some point.".ljust(80, " ")) : print("Scrapped #{ret + 1} scores successfully.".ljust(80, " "))
+  ret == -2 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{ret + 1} scores successfully.".ljust(80, " "))
 rescue Interrupt
-  puts("Scrapper interrupted.".ljust(80, " "))
+  puts("\r[INFO] Scrapper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
 rescue Exception
 end
 
 def startup
-  puts("N Scrapper initialized (Using #{THREADS} threads).")
+  puts("[INFO] N Scrapper initialized (Using #{THREADS} threads).")
   setup
-  puts("Connection to database established.")
+  puts("[INFO] Connection to database established.")
   if ARGV.size == 0
     # Put command menu here
   else
