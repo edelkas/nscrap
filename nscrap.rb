@@ -48,6 +48,19 @@ end
 class Level < ActiveRecord::Base
   belongs_to :episode
   has_many :scores, as: :highscoreable
+
+  def self.find(ep, lvl)
+    Level.where(id: EPSIZE * ep + lvl)[0]
+  end
+  def ep
+    episode.id
+  end
+  def lvl
+    id % 5
+  end
+  def format
+    "#{"%02d" % ep}-#{lvl}"
+  end
 end
 
 class Score < ActiveRecord::Base
@@ -216,6 +229,11 @@ end
 # < ---                             ANALYSIS                               --- >
 # < -------------------------------------------------------------------------- >
 
+def export(filename, content)
+  File.write(filename, content)
+  puts "Exported to '#{filename}' (#{content.length} bytes)."
+end
+
 def scores
   ep  = nil
   lvl = nil
@@ -238,23 +256,28 @@ def scores
     end
   end
 
-  scores = Level.where(id: 5 * ep + lvl)[0].scores.sort_by{ |s| -s.score }
+  scores = Level.find(ep, lvl).scores.sort_by{ |s| -s.score }
   pad_rank  = scores.size.to_s.length
   pad_score = (scores[0].score.to_f / 40).to_i.to_s.length + 4
 
   File.write(
-    "00-0.txt",
+    "#{"%02d" % ep}-#{lvl}.txt",
     scores.each_with_index.map{ |s, i|
       "#{"%0#{pad_rank}d" % i} #{"%#{pad_score}.3f" % (s.score.to_f / 40)} #{s.player.name}"
     }.join("\n")
   )
+  puts "Exported to \"#{"%02d" % ep}-#{lvl}.txt\""
 end
 
 def completions
-  
+  values = Level.all.map{ |l|
+    print("Parsing level #{l.format}...".ljust(80, " ") + "\r")
+    [l.scores.size, l.format]
+  }.sort_by{ |count, l| -count }
+  pad = values[0][0].to_s.length
+  content = values.map{ |count, l| "#{"%0#{pad}d" % count} #{l}" }.join("\n")
+  export("count.txt", content)
 end
-
-
 
 # < -------------------------------------------------------------------------- >
 # < ---                             STARTUP                                --- >
@@ -270,15 +293,20 @@ rescue
   return 1
 end
 
+def cls
+  print("".ljust(80, " ") + "\r")
+end
+
 def help
   puts "DESCRIPTION: A tool to scrape N v1.4 scores and analyze them."
   puts "USAGE: ruby nscrap.rb [ARGUMENT]"
   puts "ARGUMENTS:"
-  puts "scrape - Scrapes the server and seeds the database."
-  puts "scores - Show score leaderboard for a specific episode or level."
-  puts "  exit - Exit the program."
+  puts "  scrape - Scrapes the server and seeds the database."
+  puts "  scores - Show score leaderboard for a specific episode or level."
+  puts "   count - Sorts levels by number of completions."
+  puts "    exit - Exit the program."
   puts "NOTES:"
-  puts "    * MySQL with a database named '#{CONFIG['database']}' is needed."
+  puts "  * MySQL with a database named '#{CONFIG['database']}' is needed."
 end
 
 def main
@@ -290,10 +318,11 @@ def main
 
   loop do
     if command.nil?
+      cls
       print("Command > ")
       command = STDIN.gets.chomp
     end
-    if !["scrape", "scores", "exit", "quit"].include?(command)
+    if !["scrape", "scores", "count", "exit", "quit"].include?(command)
       help
       command = nil
       next
@@ -306,6 +335,8 @@ def main
         scrap
       when "scores"
         scores
+      when "count"
+        completions
       else
         help
     end

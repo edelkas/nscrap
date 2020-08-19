@@ -1,3 +1,5 @@
 * Implement episodes, and episode_demos in a different table.
 * Implement methods to analyze the data (rankings, etc).
-
+* Separate models from the database setup, it makes no sense that
+  the former is in the database setup section.
+* We need to sort ties based on date/id (can we?).
