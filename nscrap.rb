@@ -170,6 +170,8 @@ def setup
   Config.find_or_create_by(key: "end").update(value: NEND)
 rescue ActiveRecord::ActiveRecordError
   setup_db
+rescue
+  return 1
 end
 
 def msg
@@ -224,22 +226,44 @@ rescue Interrupt
 rescue Exception
 end
 
-def startup
+def help
+  puts "DESCRIPTION: A tool to scrape N v1.4 scores and analyze them."
+  puts "USAGE: ruby nscrap.rb [ARGUMENT]"
+  puts "ARGUMENTS:"
+  puts "scrape - Scrapes the server and seeds the database."
+  puts "  exit - Exit the program."
+  puts "NOTES:"
+  puts "    * MySQL with a database named '#{CONFIG['database']}' is needed."
+end
+
+def main
   puts("[INFO] N Scrapper initialized (Using #{THREADS} threads).")
   setup
   puts("[INFO] Connection to database established.")
-  if ARGV.size == 0
-    # Put command menu here
-  else
-    # Put a switch between the different commands here using ARGV[0]
-    # If it doesn't exist, print help.
+
+  command = (ARGV.size == 0 ? nil : ARGV[0])
+
+  loop do
+    if command.nil?
+      print("> ")
+      command = STDIN.gets.chomp
+    end
+    if !["scrape", "exit", "quit"].include?(command)
+      help
+      command = nil
+      next
+    end
+    if ["exit", "quit"].include?(command)
+      return
+    end
+    case command
+      when "scrape"
+        scrap
+      else
+        help
+    end
+    command = nil
   end
 end
 
-def demo
-  print Score.where(id: 42).first.demo
-end
-
-startup
-scrap
-#demo
+main
