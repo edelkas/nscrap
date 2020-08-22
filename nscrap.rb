@@ -7,15 +7,20 @@ require 'timeout'
 require 'nokogiri'
 require 'active_record'
 
-NSTART    = 1
-NEND      = 350000
-EMPTYSIZE = 46
+LEVEL_S   = 1      # Starting point of the level scrape
+LEVEL_E   = 350000 # Finishing point of the level scrape
+EPISODE_S = 1      # Starting point of the episode scrape
+EPISODE_E = 60000  # Finishing point of the episode scrape
+EMPTY_L   = 46     # Size of an empty level score
+EMPTY_E   = 67     # Size of an empty episode score
 EPISODES  = 100
-EPSIZE    = 5 # Per episode
-ATTEMPTS  = 10
+EPSIZE    = 5
+ATTEMPTS  = 10     # Retries until score is skipped
 THREADS   = 10
-TIMEOUT   = 5 # Seconds
-REFRESH   = 100 # Hertz
+TIMEOUT   = 5      # Seconds until score is retried
+REFRESH   = 100    # Refresh rate of the console, in hertz
+SCRAPE_E  = true   # Scrape episode scores
+SCRAPE_L  = false  # Scrape level scores
 CONFIG    = {
   'adapter'   => 'mysql2',
   'database'  => 'n',
@@ -31,6 +36,7 @@ $count   = 0
 $players = THREADS.times.map{ |t| nil }
 $indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
 $time    = 0
+$is_lvl  = true
 
 $count_mutex   = Mutex.new
 $player_mutex  = Mutex.new
@@ -92,7 +98,7 @@ def setup_db
     t.references :episode, index: true
   end
   ActiveRecord::Base.connection.create_table :scores do |t|
-    # We use the pkey as the ID
+    t.integer :score_id
     t.references :player, index: true
     t.references :highscoreable, polymorphic: true, index: true
     t.integer :rank, index: true
@@ -109,8 +115,10 @@ def setup_db
     t.string :key
     t.string :value
   end
-  Config.find_or_create_by(key: "start", value: NSTART)
-  Config.find_or_create_by(key: "end", value: NEND)
+  Config.find_or_create_by(key: "level_start", value: LEVEL_S)
+  Config.find_or_create_by(key: "level_end", value: LEVEL_E)
+  Config.find_or_create_by(key: "episode_start", value: EPISODE_S)
+  Config.find_or_create_by(key: "episode_end", value: EPISODE_E)
   (0..EPISODES - 1).each{ |ep|
     e = Episode.find_or_create_by(id: ep)
     (0..EPSIZE - 1).each{ |lvl|
@@ -128,7 +136,10 @@ end
 
 def download(id)
   attempts ||= 0
-  Net::HTTP.post_form(URI.parse("http://www.harveycartel.org/metanet/n/data13/get_lv_demo.php"), pk: id).body
+  Net::HTTP.post_form(
+    URI.parse("http://www.harveycartel.org/metanet/n/data13/get_#{$is_lvl ? "lv" : "ep"}_demo.php"),
+    pk: id
+  ).body
 rescue
   if (attempts += 1) < ATTEMPTS
     retry
@@ -150,20 +161,21 @@ def parse(i, id)
     end
   end
 
-  if ret.nil? || ret.size < EMPTYSIZE then raise end
-  if ret.size == EMPTYSIZE then return 0 end
-  s = Score.find_or_create_by(id: id)
+  empty = $is_lvl ? EMPTY_L : EMPTY_E
+  if ret.nil? || ret.size < empty then raise end
+  if ret.size == empty then return 0 end
+  s = Score.find_or_create_by(score_id: id)
   $player_mutex.synchronize do
-    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*)&demo=/,1].to_s)
+    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*)&demo/,1].to_s)
   end
   s.update(
     score: ret[/&score=(\d+)/,1].to_i,
-    highscoreable_type: Level,
-    highscoreable_id: EPSIZE * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
+    highscoreable_type: $is_lvl ? Level : Episode,
+    highscoreable_id: ($is_lvl ? EPSIZE : 1) * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
     player: $players[i]
   )
-  Demo.find_or_create_by(id: id).update(
-    demo: ret[/&demo=(.*)&epnum=/,1].to_s
+  Demo.find_or_create_by(id: s.id).update(
+    demo: $is_lvl ? ret[/&demo=(.*)&epnum=/,1].to_s : ret[/(&demo0=.*)&epnum=/,1].to_s[1..-1]
   )
   $count_mutex.synchronize do
     $count += 1
@@ -179,15 +191,15 @@ def msg
     min = $indices.min
     if min != index
       index = min
-      print("Parsing score with ID #{index} / #{NEND}...".ljust(80, " ") + "\r")
+      print("Parsing score with ID #{index} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " ") + "\r")
     end
     sleep(1.0 / REFRESH)
   end
 end
 
-def _scrap
-  nstart = Config.find_by(key: "start").value.to_i || NSTART
-  nend = Config.find_by(key: "end").value.to_i || NEND
+def _scrap(type)
+  nstart = Config.find_by(key: "#{type.downcase}_start").value.to_i || ($is_lvl ? LEVEL_S : EPISODE_S)
+  nend = Config.find_by(key: "#{type.downcase}_end").value.to_i || ($is_lvl ? LEVEL_E : EPISODE_E)
   $indices = THREADS.times.map{ |t| nstart }
 
   Thread.new{ msg }
@@ -199,12 +211,12 @@ def _scrap
           $indices_mutex.synchronize do
             $indices[i] = id
           end
-          Config.find_by(key: "start").update(value: $indices.min + 1)
+          Config.find_by(key: "#{type.downcase}_start").update(value: $indices.min + 1)
           if ret != 0
             open('LOG', 'a') { |f|
               f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
             }
-            puts("[ERROR] When parsing score with ID #{id} / #{NEND}...".ljust(80, " "))
+            puts("[ERROR] When parsing score with ID #{id} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " "))
           end
         end
       }
@@ -286,7 +298,8 @@ end
 def setup
   ActiveRecord::Base.establish_connection(CONFIG)
   if Config.find_by(key: "initialized").value.to_i != 1 then setup_db end
-  Config.find_or_create_by(key: "end").update(value: NEND)
+  Config.find_or_create_by(key: "level_end").update(value: LEVEL_E)
+  Config.find_or_create_by(key: "episode_end").update(value: EPISODE_E)
 rescue ActiveRecord::ActiveRecordError
   setup_db
 rescue
