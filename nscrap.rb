@@ -3,6 +3,8 @@
 # Modules
 require 'net/http'
 require 'timeout'
+require 'zlib'
+require 'base64'
 # Gems
 require 'nokogiri'
 require 'active_record'
@@ -134,6 +136,39 @@ end
 # < ---                          SCRAPING CODE                             --- >
 # < -------------------------------------------------------------------------- >
 
+def _pack(n, size)
+  n.to_s(16).rjust(2 * size, "0").scan(/../).map{ |b|
+    [b].pack('H*')[0]
+  }.join.force_encoding("ascii-8bit")
+end
+
+def _unpack(bytes)
+  if bytes.is_a?(Array) then bytes = bytes.join end
+  bytes.unpack('H*')[0].scan(/../).join.to_i(16)
+end
+
+# This code is used to encode and decode demos in a compressed manner.
+# We can manage a tenfold compression!
+def demo_encode(demo)
+  bytes = demo.split(':')[1].split('|').map(&:to_i).map{ |frame|
+    7.times.map{ |p|
+      _pack(((frame % 16 ** (p + 1) - frame % 16 ** p).to_f / 16 ** p).round, 1)
+    }
+  }.flatten
+  Base64.strict_encode64(Zlib::Deflate.deflate(bytes.join))
+end
+
+def demo_decode(code)
+  bytes = Zlib::Inflate.inflate(Base64.strict_decode64(code)).scan(/./m)
+  while bytes.last == "\x00" do bytes.pop end
+  frames = bytes.each_slice(7).to_a.map{ |chunk|
+    chunk.each_with_index.map{ |frame, i|
+      _unpack(frame) * 16 ** i
+    }.sum
+  }.join("|")
+  bytes.size + ":" + frames
+end
+
 def download(id)
   attempts ||= 0
   Net::HTTP.post_form(
@@ -230,8 +265,14 @@ end
 
 def scrap
   $time = Time.now
-  ret = _scrap
-  ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
+  if SCRAPE_L
+    ret = _scrap("level")
+    ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
+  end
+  if SCRAPE_E
+    ret = _scrap("episode")
+    ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
+  end
 rescue Interrupt
   puts("\r[INFO] Scrapper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
 rescue Exception
