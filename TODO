@@ -1,4 +1,4 @@
-* Create "score_id" field 
+* Actually compress demos. For episodes, compress each demo and the concatenate carefully.
 * Make compressing an option with a variable.
 * Implement episodes.
 * Implement methods to analyze the data (rankings, etc).
