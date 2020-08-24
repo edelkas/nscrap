@@ -166,7 +166,7 @@ def demo_decode(code)
       _unpack(frame) * 16 ** i
     }.sum
   }.join("|")
-  bytes.size + ":" + frames
+  bytes.size.to_s + ":" + frames
 end
 
 def download(id)
@@ -201,7 +201,7 @@ def parse(i, id)
   if ret.size == empty then return 0 end
   s = Score.find_or_create_by(score_id: id)
   $player_mutex.synchronize do
-    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*)&demo/,1].to_s)
+    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*?)&demo/,1].to_s)
   end
   s.update(
     score: ret[/&score=(\d+)/,1].to_i,
@@ -266,10 +266,12 @@ end
 def scrap
   $time = Time.now
   if SCRAPE_L
+    $is_lvl = true
     ret = _scrap("level")
     ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
   end
   if SCRAPE_E
+    $is_lvl = false
     ret = _scrap("episode")
     ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
   end
