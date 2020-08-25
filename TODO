@@ -1,7 +1,5 @@
-* Actually compress demos. For episodes, compress each demo and the concatenate carefully.
-* Make compressing an option with a variable.
-* Implement episodes.
 * Implement methods to analyze the data (rankings, etc).
+* Fill in the rank field for better future computation.
 * Separate models from the database setup, it makes no sense that
   the former is in the database setup section.
 * We need to sort ties based on date/id (can we?).

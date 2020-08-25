@@ -1,5 +1,3 @@
-# Note: The ID of each score and demo is the pkey in Metanet's server.
-
 # Modules
 require 'net/http'
 require 'timeout'
@@ -9,20 +7,23 @@ require 'base64'
 require 'nokogiri'
 require 'active_record'
 
-LEVEL_S   = 1      # Starting point of the level scrape
-LEVEL_E   = 350000 # Finishing point of the level scrape
 EPISODE_S = 1      # Starting point of the episode scrape
 EPISODE_E = 60000  # Finishing point of the episode scrape
-EMPTY_L   = 46     # Size of an empty level score
+LEVEL_S   = 1      # Starting point of the level scrape
+LEVEL_E   = 350000 # Finishing point of the level scrape
+
+ATTEMPTS  = 10     # Retries until score is skipped
+COMPRESS  = true   # Compress demos before storing in db
 EMPTY_E   = 67     # Size of an empty episode score
+EMPTY_L   = 46     # Size of an empty level score
 EPISODES  = 100
 EPSIZE    = 5
-ATTEMPTS  = 10     # Retries until score is skipped
-THREADS   = 10
-TIMEOUT   = 5      # Seconds until score is retried
 REFRESH   = 100    # Refresh rate of the console, in hertz
 SCRAPE_E  = true   # Scrape episode scores
-SCRAPE_L  = false  # Scrape level scores
+SCRAPE_L  = true  # Scrape level scores
+TIMEOUT   = 5      # Seconds until score is retried
+THREADS   = 10     # Concurrency, set to 1 to disable
+
 CONFIG    = {
   'adapter'   => 'mysql2',
   'database'  => 'n',
@@ -39,6 +40,7 @@ $players = THREADS.times.map{ |t| nil }
 $indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
 $time    = 0
 $is_lvl  = true
+$msg     = false
 
 $count_mutex   = Mutex.new
 $player_mutex  = Mutex.new
@@ -60,12 +62,15 @@ class Level < ActiveRecord::Base
   def self.find(ep, lvl)
     Level.where(id: EPSIZE * ep + lvl)[0]
   end
+
   def ep
     episode.id
   end
+
   def lvl
     id % 5
   end
+
   def format
     "#{"%02d" % ep}-#{lvl}"
   end
@@ -77,7 +82,7 @@ class Score < ActiveRecord::Base
   has_one :demo
 
   def demo
-    Demo.where(id: self.id).first.demo.to_s
+    decode(Demo.where(id: self.id).first.demo.to_s)
   end
 end
 
@@ -93,6 +98,7 @@ class Config < ActiveRecord::Base
 end
 
 def setup_db
+  puts("Initializing database...")
   ActiveRecord::Base.establish_connection(CONFIG)
   ActiveRecord::Base.connection.create_table :episodes do |t|
   end
@@ -117,10 +123,10 @@ def setup_db
     t.string :key
     t.string :value
   end
-  Config.find_or_create_by(key: "level_start", value: LEVEL_S)
-  Config.find_or_create_by(key: "level_end", value: LEVEL_E)
+  Config.find_or_create_by(key: "level_start",   value: LEVEL_S)
+  Config.find_or_create_by(key: "level_end",     value: LEVEL_E)
   Config.find_or_create_by(key: "episode_start", value: EPISODE_S)
-  Config.find_or_create_by(key: "episode_end", value: EPISODE_E)
+  Config.find_or_create_by(key: "episode_end",   value: EPISODE_E)
   (0..EPISODES - 1).each{ |ep|
     e = Episode.find_or_create_by(id: ep)
     (0..EPSIZE - 1).each{ |lvl|
@@ -150,23 +156,41 @@ end
 # This code is used to encode and decode demos in a compressed manner.
 # We can manage a tenfold compression!
 def demo_encode(demo)
+  framecount = demo.split(':')[0]
   bytes = demo.split(':')[1].split('|').map(&:to_i).map{ |frame|
     7.times.map{ |p|
       _pack(((frame % 16 ** (p + 1) - frame % 16 ** p).to_f / 16 ** p).round, 1)
     }
   }.flatten
-  Base64.strict_encode64(Zlib::Deflate.deflate(bytes.join))
+  Base64.strict_encode64(Zlib::Deflate.deflate(framecount + ":" + bytes.join))
 end
 
 def demo_decode(code)
-  bytes = Zlib::Inflate.inflate(Base64.strict_decode64(code)).scan(/./m)
-  while bytes.last == "\x00" do bytes.pop end
+  bytes = Zlib::Inflate.inflate(Base64.strict_decode64(code))
+  framecount = bytes.split(':')[0]
+  bytes = bytes.split(':')[1].scan(/./m)
   frames = bytes.each_slice(7).to_a.map{ |chunk|
     chunk.each_with_index.map{ |frame, i|
       _unpack(frame) * 16 ** i
     }.sum
-  }.join("|")
-  bytes.size.to_s + ":" + frames
+  }.join('|')
+  framecount + ':' + frames
+end
+
+def encode(demo)
+  if demo.class == String
+    COMPRESS ? demo_encode(demo) : demo
+  elsif demo.class == Array
+    COMPRESS ? demo.map{ |d| demo_encode(d) }.join('&') : demo.join('&')
+  end
+end
+
+def decode(code)
+  if code.index('&').nil?
+    COMPRESS ? demo_decode(code) : demo
+  else
+    COMPRESS ? code.split('&').map{ |c| demo_decode(c) } : code.split('&')
+  end
 end
 
 def download(id)
@@ -199,7 +223,7 @@ def parse(i, id)
   empty = $is_lvl ? EMPTY_L : EMPTY_E
   if ret.nil? || ret.size < empty then raise end
   if ret.size == empty then return 0 end
-  s = Score.find_or_create_by(score_id: id)
+  s = Score.find_or_create_by(score_id: id, highscoreable_type: $is_lvl ? Level : Episode)
   $player_mutex.synchronize do
     $players[i] = Player.find_or_create_by(name: ret[/&name=(.*?)&demo/,1].to_s)
   end
@@ -210,7 +234,7 @@ def parse(i, id)
     player: $players[i]
   )
   Demo.find_or_create_by(id: s.id).update(
-    demo: $is_lvl ? ret[/&demo=(.*)&epnum=/,1].to_s : ret[/(&demo0=.*)&epnum=/,1].to_s[1..-1]
+    demo: $is_lvl ? encode(ret[/&demo=(.*)&epnum=/,1].to_s) : encode(ret.scan(/demo\d+=(.*?)&/).map(&:first))
   )
   $count_mutex.synchronize do
     $count += 1
@@ -223,19 +247,23 @@ end
 def msg
   index = 0
   while true
-    min = $indices.min
-    if min != index
-      index = min
-      print("Parsing score with ID #{index} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " ") + "\r")
+    if $msg
+      min = $indices.min
+      if min != index
+        index = min
+        print("Parsing score with ID #{index} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " ") + "\r")
+      end
+      sleep(1.0 / REFRESH)
     end
-    sleep(1.0 / REFRESH)
   end
 end
 
 def _scrap(type)
   nstart = Config.find_by(key: "#{type.downcase}_start").value.to_i || ($is_lvl ? LEVEL_S : EPISODE_S)
   nend = Config.find_by(key: "#{type.downcase}_end").value.to_i || ($is_lvl ? LEVEL_E : EPISODE_E)
+  if nstart == nend then return 0 end
   $indices = THREADS.times.map{ |t| nstart }
+  $msg = true
 
   Thread.new{ msg }
   threads = THREADS.times.map{ |i|
@@ -258,6 +286,8 @@ def _scrap(type)
     end
   }
   threads.each(&:join)
+  $msg = false
+  Config.find_by(key: "#{type.downcase}_start").update(value: nend)
   return 0
 rescue
   return 1
@@ -265,18 +295,27 @@ end
 
 def scrap
   $time = Time.now
+  $count = 0
+  error = false
   if SCRAPE_L
+    puts("Scraping levels.".ljust(80, " "))
     $is_lvl = true
     ret = _scrap("level")
-    ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
+    if ret != 0 then error = true end
   end
   if SCRAPE_E
+    puts("Scraping episodes.".ljust(80, " "))
     $is_lvl = false
     ret = _scrap("episode")
-    ret != 0 ? print("[ERROR] Scrapping failed at some point.".ljust(80, " ")) : print("[INFO] Scrapped #{$count} scores successfully.".ljust(80, " "))
+    if ret != 0 then error = true end
+  end
+  if error
+    puts("\r[ERROR] Scraping failed at some point.".ljust(80, " "))
+  else
+    puts("\r[INFO] Scraped #{$count} scores successfully in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
   end
 rescue Interrupt
-  puts("\r[INFO] Scrapper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
+  puts("\r[INFO] Scraper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
 rescue Exception
 end
 
@@ -349,6 +388,13 @@ rescue
   return 1
 end
 
+def reset
+  Config.find_or_create_by(key: "level_start").update(value: LEVEL_S)
+  Config.find_or_create_by(key: "level_end").update(value: LEVEL_E)
+  Config.find_or_create_by(key: "episode_start").update(value: EPISODE_S)
+  Config.find_or_create_by(key: "episode_end").update(value: EPISODE_E)
+end
+
 def cls
   print("".ljust(80, " ") + "\r")
 end
@@ -358,6 +404,7 @@ def help
   puts "USAGE: ruby nscrap.rb [ARGUMENT]"
   puts "ARGUMENTS:"
   puts "  scrape - Scrapes the server and seeds the database."
+  puts "   reset - Resets database config values (e.g. to scrape a-fresh)"
   puts "  scores - Show score leaderboard for a specific episode or level."
   puts "   count - Sorts levels by number of completions."
   puts "    exit - Exit the program."
@@ -366,7 +413,7 @@ def help
 end
 
 def main
-  puts("[INFO] N Scrapper initialized (Using #{THREADS} threads).")
+  puts("[INFO] N Scraper initialized (Using #{THREADS} threads).")
   setup
   puts("[INFO] Connection to database established.")
 
@@ -378,7 +425,7 @@ def main
       print("Command > ")
       command = STDIN.gets.chomp
     end
-    if !["scrape", "scores", "count", "exit", "quit"].include?(command)
+    if !["scrape", "reset", "scores", "count", "exit", "quit"].include?(command)
       help
       command = nil
       next
@@ -393,11 +440,15 @@ def main
         scores
       when "count"
         completions
+      when "reset"
+        reset
       else
         help
     end
     command = nil
   end
+rescue Interrupt
+rescue
 end
 
 main
