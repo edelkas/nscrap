@@ -1,5 +1,8 @@
 * Implement methods to analyze the data (rankings, etc).
 * Fill in the rank field for better future computation.
+* To verify demo compression, we could compare every demo against
+  the decoding of the encoding of the demo, and raise an exception
+  if not equal. It would probably not bottleneck the program.
 * Separate models from the database setup, it makes no sense that
   the former is in the database setup section.
 * We need to sort ties based on date/id (can we?).
