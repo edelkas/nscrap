@@ -1,3 +1,8 @@
+* Experiment with other compression algos (e.g. BWT from bzip2,
+  LZMA from 7zip, etc). Compare not only the compression ratio,
+  but also benchmark to ensure it doesn't bottleneck the program.
+  To benchmark, do it both separately first, and then within the
+  program (say, by parsing 10k scores and seeing the time).
 * Implement methods to analyze the data (rankings, etc).
 * Fill in the rank field for better future computation.
 * To verify demo compression, we could compare every demo against
