@@ -162,7 +162,7 @@ def demo_encode(demo)
       _pack(((frame % 16 ** (p + 1) - frame % 16 ** p).to_f / 16 ** p).round, 1)
     }
   }.flatten
-  Base64.strict_encode64(Zlib::Deflate.deflate(framecount + ":" + bytes.join))
+  Base64.strict_encode64(Zlib::Deflate.deflate(framecount + ":" + bytes.join, 9))
 end
 
 def demo_decode(code)

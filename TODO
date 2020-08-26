@@ -1,12 +1,3 @@
-* Experiment with other compression algos (e.g. BWT from bzip2,
-  LZMA from 7zip, etc).
-    * Compare the compression ratio.
-    * Benchmark to ensure it doesn't bottleneck the program.
-      (To benchmark, do it both separately first, and then within the
-       program (say, by parsing 10k scores and seeing the time)).
-    * Maybe change COMPRESSION from a boolean to an integer that specifies
-      the compression level: e.g. 0 being none, 1 being zlib, 2 being lzma...
-      So that even if performance gets sacrificed the user can choose.
 * Implement methods to analyze the data (rankings, etc).
 * Fill in the rank field for better future computation.
 * To verify demo compression, we could compare every demo against
