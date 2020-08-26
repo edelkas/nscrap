@@ -1,3 +1,11 @@
+* There will necessarily be incorrectly downloaded scores, which will have some
+  NULL values. Implement a method called "diagnose" to seek for these dubious scores
+  and another one named "patch" to seek for redownload them to fix them.
+    Other things to sanitize:
+      - Scores without demos, check those.
+      - IDs without score, maybe a new function called "recheck".
+      - Make a function to show some stats, like total number of scores, demos, scores
+        without demos, etc, to diagnose.
 * Implement methods to analyze the data (rankings, etc).
 * Fill in the rank field for better future computation.
 * To verify demo compression, we could compare every demo against
