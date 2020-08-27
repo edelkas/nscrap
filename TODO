@@ -6,6 +6,7 @@
       - IDs without score, maybe a new function called "recheck".
       - Make a function to show some stats, like total number of scores, demos, scores
         without demos, etc, to diagnose.
+* Add ignore list.
 * Implement methods to analyze the data (rankings, etc).
 * Fill in the rank field for better future computation.
 * To verify demo compression, we could compare every demo against
@@ -13,4 +14,3 @@
   if not equal. It would probably not bottleneck the program.
 * Separate models from the database setup, it makes no sense that
   the former is in the database setup section.
-* We need to sort ties based on date/id (can we?).

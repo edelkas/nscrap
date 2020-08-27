@@ -18,9 +18,10 @@ EMPTY_E   = 67     # Size of an empty episode score
 EMPTY_L   = 46     # Size of an empty level score
 EPISODES  = 100
 EPSIZE    = 5
+MAX       = 26000  # Maximum score, 650 seconds, bigger is ignored
 REFRESH   = 100    # Refresh rate of the console, in hertz
 SCRAPE_E  = true   # Scrape episode scores
-SCRAPE_L  = true  # Scrape level scores
+SCRAPE_L  = true   # Scrape level scores
 TIMEOUT   = 5      # Seconds until score is retried
 THREADS   = 10     # Concurrency, set to 1 to disable
 
@@ -35,12 +36,15 @@ CONFIG    = {
   'collation' => 'utf8mb4_unicode_ci'
 }
 
-$count   = 0
+# Global variables to control the concurrency of the program
+$count   = 0     # How many scores have been scraped so far
 $players = THREADS.times.map{ |t| nil }
 $indices = THREADS.times.map{ |t| 0 } # ID being parsed by each thread
-$time    = 0
-$is_lvl  = true
-$msg     = false
+$time    = 0     # Time of execution
+$is_lvl  = true  # Are we scraping levels or episodes.
+$msg     = false # Controls whether the messaging thread should be messaging
+$fixing  = false # Are we patching or not
+$total   = 0     # How many scores do we have to scrape or patch
 
 $count_mutex   = Mutex.new
 $player_mutex  = Mutex.new
@@ -94,6 +98,9 @@ class Demo < ActiveRecord::Base
   belongs_to :score
 end
 
+class Error < ActiveRecord::Base
+end
+
 class Config < ActiveRecord::Base
 end
 
@@ -111,6 +118,10 @@ def setup_db
     t.references :highscoreable, polymorphic: true, index: true
     t.integer :rank, index: true
     t.integer :score
+  end
+  ActiveRecord::Base.connection.create_table :errors do |t|
+    t.integer :score_id
+    t.string :highscoreable_type
   end
   ActiveRecord::Base.connection.create_table :players do |t|
     t.string :name
@@ -223,63 +234,84 @@ def parse(i, id)
   empty = $is_lvl ? EMPTY_L : EMPTY_E
   if ret.nil? || ret.size < empty then raise end
   if ret.size == empty then return 0 end
-  s = Score.find_or_create_by(score_id: id, highscoreable_type: $is_lvl ? Level : Episode)
-  $player_mutex.synchronize do
-    $players[i] = Player.find_or_create_by(name: ret[/&name=(.*?)&demo/,1].to_s)
+  score = ret[/&score=(\d+)/,1].to_i
+
+  if score <= MAX # Automatic hacked score ignore measure
+    s = Score.find_or_create_by(score_id: id, highscoreable_type: $is_lvl ? Level : Episode)
+    $player_mutex.synchronize do
+      name = ret[/&name=(.*?)&demo/,1].to_s.each_byte.map{ |b| (b < 32 || b > 126) ? nil : b.chr }.compact.join.strip
+      $players[i] = Player.find_or_create_by(name: name)
+    end
+    s.update(
+      score: score,
+      highscoreable_id: ($is_lvl ? EPSIZE : 1) * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
+      player: $players[i]
+    )
+    demo = $is_lvl ? ret[/&demo=(.*)&epnum=/,1].to_s : ret.scan(/demo\d+=(.*?)&/).map(&:first)
+    valid = $is_lvl ? !demo.index(':').nil? : !demo.map{ |d| d.index(':').nil? }.any?
+    if valid
+      Demo.find_or_create_by(id: s.id).update(
+        demo: encode(demo)
+      )
+    end
+    $count_mutex.synchronize do
+      $count += 1
+    end
   end
-  s.update(
-    score: ret[/&score=(\d+)/,1].to_i,
-    highscoreable_type: $is_lvl ? Level : Episode,
-    highscoreable_id: ($is_lvl ? EPSIZE : 1) * ret[/&epnum=(\d+)/,1].to_i + ret[/&levnum=(\d+)/,1].to_i,
-    player: $players[i]
-  )
-  Demo.find_or_create_by(id: s.id).update(
-    demo: $is_lvl ? encode(ret[/&demo=(.*)&epnum=/,1].to_s) : encode(ret.scan(/demo\d+=(.*?)&/).map(&:first))
-  )
-  $count_mutex.synchronize do
-    $count += 1
+  if score > MAX && $fixing
+    $count_mutex.synchronize do
+      $count += 1
+    end
   end
   return 0
 rescue => e
-  return e
+  return 1
 end
 
 def msg
   index = 0
   while true
     if $msg
-      min = $indices.min
-      if min != index
-        index = min
-        print("Parsing score with ID #{index} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " ") + "\r")
+      if $fixing
+        if $count != index
+          index = $count
+          print("Parsing score #{$count} / #{$total} (ID #{$indices.min})...".ljust(80, " ") + "\r")
+        end
+      else
+        min = $indices.min
+        if min != index
+          index = min
+          print("Parsing score with ID #{index} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " ") + "\r")
+        end
       end
       sleep(1.0 / REFRESH)
     end
   end
 end
 
-def _scrap(type)
-  nstart = Config.find_by(key: "#{type.downcase}_start").value.to_i || ($is_lvl ? LEVEL_S : EPISODE_S)
-  nend = Config.find_by(key: "#{type.downcase}_end").value.to_i || ($is_lvl ? LEVEL_E : EPISODE_E)
-  if nstart == nend then return 0 end
-  $indices = THREADS.times.map{ |t| nstart }
-  $msg = true
-
-  Thread.new{ msg }
-  threads = THREADS.times.map{ |i|
+def __scrap(type, ids)
+    $msg = true
+    Thread.new{ msg }
+    threads = THREADS.times.map{ |i|
     Thread.new do
-      (nstart..nend).each{ |id|
-        if id % THREADS == i
+      ids.each_with_index{ |id, j|
+        if j % THREADS == i
           ret = parse(i, id)
           $indices_mutex.synchronize do
             $indices[i] = id
           end
           Config.find_by(key: "#{type.downcase}_start").update(value: $indices.min + 1)
           if ret != 0
+            Error.find_or_create_by(score_id: id, highscoreable_type: $is_lvl ? "Level" : "Episode")
             open('LOG', 'a') { |f|
-              f.puts "[ERROR] [#{Time.now}] Score with ID #{id} failed to download."
+              f.puts "[ERROR] [#{Time.now}] #{$is_lvl ? "Level" : "Episode"} score with ID #{id} failed to download."
             }
             puts("[ERROR] When parsing score with ID #{id} / #{$is_lvl ? LEVEL_E : EPISODE_E}...".ljust(80, " "))
+          else
+            if $fixing
+              error = Error.find_by(score_id: id, highscoreable_type: $is_lvl ? "Level" : "Episode")
+              error.destroy if !error.nil?
+            end
           end
         end
       }
@@ -287,15 +319,29 @@ def _scrap(type)
   }
   threads.each(&:join)
   $msg = false
+  return 0
+rescue
+  return 1
+end
+
+def _scrap(type)
+  nstart = Config.find_by(key: "#{type.downcase}_start").value.to_i || ($is_lvl ? LEVEL_S : EPISODE_S)
+  nend = Config.find_by(key: "#{type.downcase}_end").value.to_i || ($is_lvl ? LEVEL_E : EPISODE_E)
+  if nstart == nend then return 0 end
+  $total = nend - nstart
+  $fixing = false
+  $indices = THREADS.times.map{ |t| nstart }
+  if __scrap(type, (nstart..nend).to_a) != 0 then return 1 end
   Config.find_by(key: "#{type.downcase}_start").update(value: nend)
   return 0
 rescue
   return 1
 end
 
-def scrap
+def scrape
   $time = Time.now
   $count = 0
+  $fixing = false
   error = false
   if SCRAPE_L
     puts("Scraping levels.".ljust(80, " "))
@@ -317,6 +363,79 @@ def scrap
 rescue Interrupt
   puts("\r[INFO] Scraper interrupted. Scrapped #{$count} scores in #{(Time.now - $time).round(3)} seconds.".ljust(80, " "))
 rescue Exception
+end
+
+def diagnose
+  scores = Score.where(score: nil)
+           .or(Score.where(player_id: nil))
+           .or(Score.where(highscoreable_id: nil))
+  scores_lvl = scores.where(highscoreable_type: "Level").size
+  scores_ep  = scores.where(highscoreable_type: "Episode").size
+  errors = Error.all
+  errors_lvl = errors.where(highscoreable_type: "Level").size
+  errors_ep  = errors.where(highscoreable_type: "Episode").size
+  table = [
+    [
+      "ERRORS",
+      "Levels",
+      "Episodes",
+      "Total"
+    ],
+    :sep,
+    [
+      "Corrupted scores",
+      scores_lvl,
+      scores_ep,
+      scores_lvl + scores_ep
+    ],
+    [
+      "Missing scores",
+      errors_lvl,
+      errors_ep,
+      errors_lvl + errors_ep
+    ],
+    [
+      "Total",
+      scores_lvl + errors_lvl,
+      scores_ep + errors_ep,
+      scores_lvl + scores_ep + errors_lvl + errors_ep
+    ]
+  ]
+  puts make_table(table)
+  puts "If you wish to redownload and fix the erroneous scores execute the 'patch' command."
+  puts("If they persist, they might just be corrupt in the server itself.")
+end
+
+def patch
+  scores = Score.where(score: nil)
+           .or(Score.where(player_id: nil))
+           .or(Score.where(highscoreable_id: nil))
+  errors = Error.all
+  lvls = scores.where(highscoreable_type: "Level").map(&:score_id).map(&:to_i) +
+         errors.where(highscoreable_type: "Level").map(&:score_id).map(&:to_i)
+  eps =  scores.where(highscoreable_type: "Episode").map(&:score_id).map(&:to_i) +
+         errors.where(highscoreable_type: "Episode").map(&:score_id).map(&:to_i)
+  $fixing = true
+  $count = 0
+  $time = Time.now
+  if SCRAPE_L
+    puts("Patching levels.".ljust(80, " "))
+    $is_lvl = true
+    $total = lvls.size
+    ret = __scrap("level", lvls)
+  end
+  if SCRAPE_E
+    puts("Patching episodes.".ljust(80, " "))
+    $is_lvl = false
+    $total = eps.size
+    ret = __scrap("episode", eps)
+  end 
+  $fixing = false
+  puts("\r[INFO] Patched #{$count} scores in #{(Time.now - $time).round(3)} seconds.")
+  puts("Please 'diagnose' again to verify the scores have been patched.")
+  puts("If they persist, they might just be corrupt in the server itself.")
+rescue => e
+  puts "An error occurred while patching the scores #{e}."
 end
 
 # < -------------------------------------------------------------------------- >
@@ -363,7 +482,7 @@ def scores
   puts "Exported to \"#{"%02d" % ep}-#{lvl}.txt\""
 end
 
-def completions
+def count
   values = Level.all.map{ |l|
     print("Parsing level #{l.format}...".ljust(80, " ") + "\r")
     [l.scores.size, l.format]
@@ -388,6 +507,28 @@ rescue
   return 1
 end
 
+# To use this you need to send either a matrix or :sep
+def make_table(rows, sep_x = "=", sep_y = "|", sep_i = "x")
+  text_rows = rows.select{ |r| r.is_a?(Array) }
+  count = text_rows.map(&:size).max
+  rows.each{ |r| if r.is_a?(Array) then r << "" while r.size < count end }
+  widths = (0..count - 1).map{ |c| text_rows.map{ |r| r[c].to_s.length }.max }
+  sep = widths.map{ |w| sep_i + sep_x * (w + 2) }.join + sep_i + "\n"
+  table = sep.dup
+  rows.each{ |r|
+    if r == :sep
+      table << sep
+    else
+      r.each_with_index{ |s, i|
+        table << sep_y + " " + (s.is_a?(Numeric) ? s.to_s.rjust(widths[i], " ") : s.to_s.ljust(widths[i], " ")) + " "
+      }
+      table << sep_y + "\n"
+    end
+  }
+  table << sep
+  return table
+end
+
 def reset
   Config.find_or_create_by(key: "level_start").update(value: LEVEL_S)
   Config.find_or_create_by(key: "level_end").update(value: LEVEL_E)
@@ -399,15 +540,25 @@ def cls
   print("".ljust(80, " ") + "\r")
 end
 
+def commands
+  {
+    "scrape"   => "Scrapes the server and seeds the database.",
+    "reset"    => "Resets database config values (e.g. to scrape a-fresh).",
+    "diagnose" => "Find erroneous scores.",
+    "patch"    => "Fix erronous scores.",
+    "scores"   => "Show score leaderboard for a specific episode or level.",
+    "count"    => "Sorts levels by number of completions.",
+    "exit"     => "Exit the program."
+  }
+end
+
 def help
   puts "DESCRIPTION: A tool to scrape N v1.4 scores and analyze them."
   puts "USAGE: ruby nscrap.rb [ARGUMENT]"
   puts "ARGUMENTS:"
-  puts "  scrape - Scrapes the server and seeds the database."
-  puts "   reset - Resets database config values (e.g. to scrape a-fresh)"
-  puts "  scores - Show score leaderboard for a specific episode or level."
-  puts "   count - Sorts levels by number of completions."
-  puts "    exit - Exit the program."
+  commands.each{ |c|
+    puts "  " + c[0].rjust(8, " ") + " - " + c[1]
+  }
   puts "NOTES:"
   puts "  * MySQL with a database named '#{CONFIG['database']}' is needed."
 end
@@ -416,7 +567,6 @@ def main
   puts("[INFO] N Scraper initialized (Using #{THREADS} threads).")
   setup
   puts("[INFO] Connection to database established.")
-
   command = (ARGV.size == 0 ? nil : ARGV[0])
 
   loop do
@@ -425,30 +575,17 @@ def main
       print("Command > ")
       command = STDIN.gets.chomp
     end
-    if !["scrape", "reset", "scores", "count", "exit", "quit"].include?(command)
+    if !commands.keys.include?(command)
       help
       command = nil
       next
     end
-    if ["exit", "quit"].include?(command)
-      return
-    end
-    case command
-      when "scrape"
-        scrap
-      when "scores"
-        scores
-      when "count"
-        completions
-      when "reset"
-        reset
-      else
-        help
-    end
+    send(command)
     command = nil
   end
 rescue Interrupt
 rescue
+  puts "An error occurred."
 end
 
 main
