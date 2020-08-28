@@ -14,6 +14,7 @@ LEVEL_E   = 350000 # Finishing point of the level scrape
 
 ATTEMPTS  = 10     # Retries until score is skipped
 COMPRESS  = true   # Compress demos before storing in db
+DEBUG     = false  # Will show exception messages
 EMPTY_E   = 67     # Size of an empty episode score
 EMPTY_L   = 46     # Size of an empty level score
 EPISODES  = 100
@@ -419,14 +420,43 @@ rescue Exception
 end
 
 def diagnose
+  puts("Finding corrupt scores...")
   scores = Score.where(score: nil)
            .or(Score.where(player_id: nil))
            .or(Score.where(highscoreable_id: nil))
   scores_lvl = scores.where(highscoreable_type: "Level").size
   scores_ep  = scores.where(highscoreable_type: "Episode").size
-  errors = Error.all
+  puts("Finding missing scores...")
+  errors     = Error.all
   errors_lvl = errors.where(highscoreable_type: "Level").size
   errors_ep  = errors.where(highscoreable_type: "Episode").size
+  puts("Finding hacked scores...")
+  hacks      = Player.where(name: IGNORED_HACKERS).map(&:id)
+  hacks_lvl  = Score.where(player_id: hacks, highscoreable_type: "Level").size
+  hacks_ep   = Score.where(player_id: hacks, highscoreable_type: "Episode").size
+  puts("Finding duplicate scores...")
+  duplis     = Score.select(
+                            'player_id',
+                            'count(player_id)',
+                            'highscoreable_type',
+                            'count(highscoreable_type)',
+                            'highscoreable_id',
+                            'count(highscoreable_id)'
+                           )
+                    .group(
+                            'player_id',
+                            'highscoreable_type',
+                            'highscoreable_id'
+                          )
+                    .having(
+                            'count(player_id) > 1',
+                            'count(highscoreable_type) > 1',
+                            'count(highscoreable_id) > 1'
+                           )
+  
+  duplis_lvl = duplis.where(highscoreable_type: "Level").to_a.size
+  duplis_ep  = duplis.where(highscoreable_type: "Episode").to_a.size
+  score_ids = scores.map(&:id)  
   table = [
     [
       "ERRORS",
@@ -436,7 +466,7 @@ def diagnose
     ],
     :sep,
     [
-      "Corrupted scores",
+      "Corrupt scores",
       scores_lvl,
       scores_ep,
       scores_lvl + scores_ep
@@ -448,15 +478,33 @@ def diagnose
       errors_lvl + errors_ep
     ],
     [
+      "Hacked scores",
+      hacks_lvl,
+      hacks_ep,
+      hacks_lvl + hacks_ep
+    ],
+    [
+      "Duplicate scores",
+      duplis_lvl,
+      duplis_ep,
+      duplis_lvl + duplis_ep
+    ],
+    :sep,
+    [
       "Total",
-      scores_lvl + errors_lvl,
-      scores_ep + errors_ep,
-      scores_lvl + scores_ep + errors_lvl + errors_ep
+      scores_lvl + errors_lvl + hacks_lvl + duplis_lvl,
+      scores_ep + errors_ep + hacks_ep + duplis_ep,
+      scores_lvl + scores_ep + errors_lvl + errors_ep + hacks_lvl + hacks_ep + duplis_lvl + duplis_ep
     ]
   ]
   puts make_table(table)
-  puts "If you wish to redownload and fix the erroneous scores execute the 'patch' command."
-  puts("If they persist, they might just be corrupt in the server itself.")
+  puts("To fix the corrupt and missing scores run the 'patch' command.")
+  puts("To remove the hacked scores run the 'sanitize' command.")
+  puts("To remove the duplicate scores run the 'uniq' command.")
+  puts("Note: If corrupt scores persist, they might just be corrupt in the server itself.")
+rescue => e
+  puts "An error occurred while diagnosing."
+  puts e if DEBUG
 end
 
 def patch
@@ -488,18 +536,61 @@ def patch
   puts("Please 'diagnose' again to verify the scores have been patched.")
   puts("If they persist, they might just be corrupt in the server itself.")
 rescue => e
-  puts "An error occurred while patching the scores #{e}."
+  puts "An error occurred while patching the scores."
+  puts e if DEBUG
 end
 
 def sanitize
   players = Player.where(name: IGNORED_HACKERS)
   player_ids = players.map(&:id)
+  puts("Found #{player_ids.size} hackers.")
   scores = Score.where(player_id: player_ids)
   score_ids = scores.map(&:id)
+  puts("Found #{score_ids} hacked scores.")
   demos = Demo.where(id: score_ids)
+  puts("Removing...")
   players.each{ |p| p.destroy }
   scores.each{ |s| s.destroy }
   demos.each{ |d| d.destroy }
+  puts("Destroyed hacked scores.")
+end
+
+def uniq
+  puts("Finding duplicate scores...")
+  duplis = Score.select(
+                        'player_id',
+                        'count(player_id)',
+                        'highscoreable_type',
+                        'count(highscoreable_type)',
+                        'highscoreable_id',
+                        'count(highscoreable_id)'
+                       )
+                .group(
+                       'player_id',
+                       'highscoreable_type',
+                       'highscoreable_id'
+                      )
+               .having(
+                       'count(player_id) > 1',
+                       'count(highscoreable_type) > 1',
+                       'count(highscoreable_id) > 1'
+                       )
+  puts("Removing duplicate scores...")
+  duplis.each{ |d|
+    Score.where(
+                player_id: d.player_id,
+                highscoreable_type: d.highscoreable_type,
+                highscoreable_id: d.highscoreable_id
+               )
+         .sort_by{ |s|
+                   [-s.score, -s.score_id]
+                 }[1..-1]
+         .each{ |s|
+                s.destroy
+                Demo.find(s.id).destroy if !Demo.find(s.id).nil?
+              }
+  }
+  puts("Done.")
 end
 
 def seed
@@ -605,6 +696,40 @@ def stats
   puts make_table(table)
 end
 
+def total
+  ["Level", "Episode"].each{ |type|
+    puts("Computing Total #{type} Score boards...")
+    range = type == "Level" ? (0..EPSIZE * EPISODES - 1) : (0..EPISODES - 1)
+    table = Score.where(
+              highscoreable_type: type,
+              highscoreable_id: range
+            )
+         .group(:player_id)
+         .sum(:score)
+         .sort_by{ |id, t| -t }
+         .each_with_index
+         .map{ |p, r|
+               player = Player.find(p[0])
+               [
+                 r,
+                 player.name,
+                 "%.3f" % (p[1].to_f / 40),
+                 Score.where(
+                   player_id: player.id,
+                   highscoreable_type: type,
+                   highscoreable_id: range
+                 ).size
+               ]
+             }
+    table.prepend(:sep)
+    table.prepend(["Rank", "Player", type == "Level" ? "TLS" : "TES", "Scores"])
+    export("#{type == "Level" ? "tls" : "tes"}.txt", make_table(table))
+  }
+rescue => e
+  puts "An error occurred."
+  puts e
+end
+
 # < -------------------------------------------------------------------------- >
 # < ---                             STARTUP                                --- >
 # < -------------------------------------------------------------------------- >
@@ -660,9 +785,11 @@ def commands
     "diagnose" => "Find erroneous scores.",
     "patch"    => "Fix erronous scores.",
     "sanitize" => "Remove hackers from database.",
+    "uniq"     => "Remove duplicate scores.",
     "seed"     => "Calculates and fills 'rank' field of database.",
     "scores"   => "Show score leaderboard for a specific episode or level.",
     "count"    => "Sorts levels by number of completions.",
+    "total"    => "Show total score leaderboards",
     "stats"    => "Shows statistics.",
     "exit"     => "Exit the program."
   }

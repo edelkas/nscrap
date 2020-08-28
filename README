@@ -18,7 +18,7 @@ NOTES:
   * Some scores do not exist, so the total amount of scraped scores will be
     lower than the total number of different ids.
   * A few scores do not have demos, so the final number of entries in the
-    'scores' and 'demos' tables might not coincide.
+    'scores' and 'demos' tables may not coincide or some demos maybe be null.
 
 NOTE ON COMPRESSION:
   For the purpose of compression, the demo code is transformed in a way that
@@ -42,3 +42,11 @@ NOTE ON COMPRESSION:
   of inputs for each frame, see the functions "demo_encode" and "demo_decode"
   on the source code.
       
+STATS:
+  After using the program to scrape the whole database, and cleaning it, I
+  present some figures.
+  
+  * 365134 scores.
+  * 22231 players.
+  * 2189 duplicated/triplicated scores.
+  * 22 scores without a valid demo.
