@@ -36,6 +36,54 @@ CONFIG    = {
   'collation' => 'utf8mb4_unicode_ci'
 }
 
+# Hackers won't even be added to the database.
+# Cheaters will, but will be ignored from all functions.
+IGNORED_HACKERS = [
+  'sry4trbleIMdone',
+  'alllan',
+  'Marcao',
+  'JoaoGCNunes',
+  'getpucht',
+  'haxyoscoreboard',
+  'haxYOscoreboard',
+  'asda',
+  'dnawrkshp',
+  'Cuppy33',
+  'Yvsk',
+  'PolakJamByc',
+  'KOKOZUDO',
+  'igotbored:(',
+  'JC239',
+  'ninjump',
+  'luanplayer',
+  'banan049',
+  'managans'
+]
+
+IGNORED_CHEATERS = [
+  'kryX-orange',
+  'ANGERFIST',
+  'L3X',
+  'Bonzai',
+  'naem',
+  'crappitrash',
+  'Goo',
+  'Sp33dY',
+  'pokemaniac1342',
+  'ACEOFSPADEWINS',
+  'Vegeta',
+  'BAS3',
+  'cheese_god',
+  'fuckingyourdad',
+  'fuckingyourmom',
+  'fuckingcrappitrash',
+  'fuckingyourbrother',
+  'fuckingyoursister',
+  'schwah',
+  'VotedStraw61372',
+  'Donald_J_Trump'
+]
+
 # Global variables to control the concurrency of the program
 $count   = 0     # How many scores have been scraped so far
 $players = THREADS.times.map{ |t| nil }
@@ -235,11 +283,11 @@ def parse(i, id)
   if ret.nil? || ret.size < empty then raise end
   if ret.size == empty then return 0 end
   score = ret[/&score=(\d+)/,1].to_i
+  name = ret[/&name=(.*?)&demo/,1].to_s.each_byte.map{ |b| (b < 32 || b > 126) ? nil : b.chr }.compact.join.strip
 
-  if score <= MAX # Automatic hacked score ignore measure
+  if score <= MAX && !IGNORED_HACKERS.include?(name) # Ignore hackers
     s = Score.find_or_create_by(score_id: id, highscoreable_type: $is_lvl ? Level : Episode)
     $player_mutex.synchronize do
-      name = ret[/&name=(.*?)&demo/,1].to_s.each_byte.map{ |b| (b < 32 || b > 126) ? nil : b.chr }.compact.join.strip
       $players[i] = Player.find_or_create_by(name: name)
     end
     s.update(
@@ -257,10 +305,11 @@ def parse(i, id)
     $count_mutex.synchronize do
       $count += 1
     end
-  end
-  if score > MAX && $fixing
-    $count_mutex.synchronize do
-      $count += 1
+  else
+    if $fixing
+      $count_mutex.synchronize do
+        $count += 1
+      end
     end
   end
   return 0
@@ -438,6 +487,17 @@ rescue => e
   puts "An error occurred while patching the scores #{e}."
 end
 
+def sanitize
+  players = Player.where(name: IGNORED_HACKERS)
+  player_ids = players.map(&:id)
+  scores = Score.where(player_id: player_ids)
+  score_ids = scores.map(&:id)
+  demos = Demo.where(id: score_ids)
+  players.each{ |p| p.destroy }
+  scores.each{ |s| s.destroy }
+  demos.each{ |d| d.destroy }
+end
+
 # < -------------------------------------------------------------------------- >
 # < ---                             ANALYSIS                               --- >
 # < -------------------------------------------------------------------------- >
@@ -546,6 +606,7 @@ def commands
     "reset"    => "Resets database config values (e.g. to scrape a-fresh).",
     "diagnose" => "Find erroneous scores.",
     "patch"    => "Fix erronous scores.",
+    "sanitize" => "Remove hackers from database.",
     "scores"   => "Show score leaderboard for a specific episode or level.",
     "count"    => "Sorts levels by number of completions.",
     "exit"     => "Exit the program."
