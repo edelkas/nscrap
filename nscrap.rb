@@ -105,6 +105,10 @@ $indices_mutex = Mutex.new
 class Episode < ActiveRecord::Base
   has_many :levels
   has_many :scores, as: :highscoreable
+
+  def format
+    self.id.to_s.rjust(2, "0")
+  end
 end
 
 class Level < ActiveRecord::Base
@@ -498,6 +502,20 @@ def sanitize
   demos.each{ |d| d.destroy }
 end
 
+def seed
+  ActiveRecord::Base.transaction do
+    [Level, Episode].each{ |type|
+      type.all.each{ |l|
+        print("Seeding #{type.to_s.downcase} #{l.format}...".ljust(80, " ") + "\r")
+        l.scores.sort_by{ |s| [-s.score, s.score_id] }.each_with_index{ |s, r|
+          s.update(rank: r)
+        }
+      }
+    }
+  end
+  puts "Done"
+end
+
 # < -------------------------------------------------------------------------- >
 # < ---                             ANALYSIS                               --- >
 # < -------------------------------------------------------------------------- >
@@ -550,6 +568,41 @@ def count
   pad = values[0][0].to_s.length
   content = values.map{ |count, l| "#{"%0#{pad}d" % count} #{l}" }.join("\n")
   export("count.txt", content)
+end
+
+def stats
+  lvl_scores = Score.where(highscoreable_type: "Level")
+  ep_scores  = Score.where(highscoreable_type: "Episode")
+  tls = lvl_scores.where(rank: 0).pluck(:score).sum
+  tes = ep_scores.where(rank: 0).pluck(:score).sum
+  table = [
+    [
+      "",
+      "Levels",
+      "Episodes",
+      "Total"
+    ],
+    :sep,
+    [
+      "Scores",
+      lvl_scores.size,
+      ep_scores.size,
+      lvl_scores.size + ep_scores.size
+    ],
+    [
+      "Players",
+      "",
+      "",
+      Player.all.size
+    ],
+    [
+      "Total Score",
+      "%.3f" % (tls.to_f / 40),
+      "%.3f" % (tes.to_f / 40),
+      "%.3f" % ((tls - tes - 40 * 4 * 90 * 100).to_f / 40)
+    ]
+  ]
+  puts make_table(table)
 end
 
 # < -------------------------------------------------------------------------- >
@@ -607,8 +660,10 @@ def commands
     "diagnose" => "Find erroneous scores.",
     "patch"    => "Fix erronous scores.",
     "sanitize" => "Remove hackers from database.",
+    "seed"     => "Calculates and fills 'rank' field of database.",
     "scores"   => "Show score leaderboard for a specific episode or level.",
     "count"    => "Sorts levels by number of completions.",
+    "stats"    => "Shows statistics.",
     "exit"     => "Exit the program."
   }
 end

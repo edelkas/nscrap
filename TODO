@@ -1,8 +1,3 @@
-* Remove hackers from the database to obtain the final dump.
-* Add 2 ignore lists:
-  - One for hackers, whose scores won't even be added to the database.
-  - One for cheaters, whose scores will be added to the database, but they
-    won't be included in any analysis function (like rankings).
 * Add 'scores without demos' to 'diagnose', maybe fix'em?
 * Add stats function with total number of scores, players, etc.
 * Add game stats function with tls, tes, etc.
