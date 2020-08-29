@@ -1,8 +1,4 @@
-* Add 'scores without demos' to 'diagnose', maybe fix'em?
-* Add stats function with total number of scores, players, etc.
-* Add game stats function with tls, tes, etc.
 * Implement methods to analyze the data (rankings, etc).
-* Fill in the rank field for better future computation.
 * To verify demo compression, we could compare every demo against
   the decoding of the encoding of the demo, and raise an exception
   if not equal. It would probably not bottleneck the program.

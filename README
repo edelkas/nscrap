@@ -4,13 +4,21 @@ to a table of players, the rank, the episode number, the level number, and the
 demo (5 ones in the case of episodes).
 
 USAGE:
-  * Configure the script by modifying the values of the constants defined at the
-    start of the code. The comments explain their meaning.
-  * Manually create a MySQL database named 'n'. Alternatively, you can modify
-    the CONFIG constant which contains the database parameters.
-  * Run the script. There are various commands available, which can be passed
-    as command line arguments or inserted after execution. Type "help", or
-    any incorrect command really, to see the list of commands.
+  * 1) Configure the script by modifying the values of the constants defined at the
+       start of the code. The comments explain their meaning.
+  * 2) Manually create a MySQL database named 'n'. Alternatively, you can modify
+       the CONFIG constant which contains the database parameters.
+  * 3) Run the script. There are various commands available, which can be passed
+       as command line arguments or inserted after execution. Type "help", or
+       any incorrect command really, to see the list of commands.
+
+To have a fully correct database I recommend the following steps:
+  1) Execute 'scrape' to scrape the complete database.
+  2) Execute 'diagnose' to find errors in the database.
+    2.1) Execute 'sanitize' if there are hacked scores.
+    2.2) Execute 'patch' if there are corrupt or missing scores.
+    2.3) Execute 'uniq' if there are duplicate scores.
+  3) Execute 'seed' to fill in the rank field.
 
 NOTES:
   * The first execution will take longer to start up since the database needs
@@ -46,7 +54,8 @@ STATS:
   After using the program to scrape the whole database, and cleaning it, I
   present some figures.
   
-  * 365134 scores.
-  * 22231 players.
+  * 365130 scores.
+  * 22222 players (that's right!).
   * 2189 duplicated/triplicated scores.
   * 22 scores without a valid demo.
+  * 9 duplicated players.
