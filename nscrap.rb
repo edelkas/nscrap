@@ -652,13 +652,14 @@ def scores
 end
 
 def count
-  values = Level.all.map{ |l|
-    print("Parsing level #{l.format}...".ljust(80, " ") + "\r")
-    [l.scores.size, l.format]
-  }.sort_by{ |count, l| -count }
-  pad = values[0][0].to_s.length
-  content = values.map{ |count, l| "#{"%0#{pad}d" % count} #{l}" }.join("\n")
-  export("count.txt", content)
+  [Level, Episode].each{ |type|
+    table = type.all.map{ |l|
+      print("Parsing #{type.to_s.downcase} #{l.format}...".ljust(80, " ") + "\r")
+      [l.format, l.scores.size]
+    }.sort_by{ |l, count| -count }
+    table.prepend(:sep).prepend([type.to_s, "Completions"])
+    export("count_#{type.to_s.downcase}.txt", make_table(table))
+  }
 end
 
 def stats
