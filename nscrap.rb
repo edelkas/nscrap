@@ -605,7 +605,7 @@ def seed
     }
   end
   puts "Done"
-end
+end 
 
 # < -------------------------------------------------------------------------- >
 # < ---                             ANALYSIS                               --- >
@@ -781,7 +781,6 @@ end
 def commands
   {
     "scrape"   => "Scrapes the server and seeds the database.",
-    "reset"    => "Resets database config values (e.g. to scrape a-fresh).",
     "diagnose" => "Find erroneous scores.",
     "patch"    => "Fix erronous scores.",
     "sanitize" => "Remove hackers from database.",
@@ -791,6 +790,7 @@ def commands
     "count"    => "Sorts levels by number of completions.",
     "total"    => "Show total score leaderboards",
     "stats"    => "Shows statistics.",
+    "reset"    => "Resets database config values (e.g. to scrape a-fresh).",
     "exit"     => "Exit the program."
   }
 end
@@ -799,7 +799,7 @@ def help
   puts "DESCRIPTION: A tool to scrape N v1.4 scores and analyze them."
   puts "USAGE: ruby nscrap.rb [ARGUMENT]"
   puts "ARGUMENTS:"
-  commands.each{ |c|
+  commands.sort_by{ |c| c[0] }.each{ |c|
     puts "  " + c[0].rjust(8, " ") + " - " + c[1]
   }
   puts "NOTES:"

@@ -19,4 +19,5 @@ http://www.harveycartel.org/metanet/n/data13/n_highscores_u.php?name=EddyMataGal
 
 http://www.harveycartel.org/metanet/n/data13/get_lv_demo.php?pk=232996
 http://www.harveycartel.org/metanet/n/data13/get_ep_demo.php?pk=39220
-# Note: A GET request won't work here, you need a POST form.
+
+# Note: POST (not GET) requests are needed here.
